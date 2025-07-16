@@ -4,6 +4,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from io import BytesIO
+import time
 
 # Conecta com Google Sheets via credenciais
 def conectar_planilha_google(credenciais_json, sheet_url):
@@ -35,20 +36,26 @@ def gerar_excel_para_download(df_resultado):
 
 # Interface Streamlit
 def main():
-    st.title("Conciliação Automática")
+    st.title("🔍 Conciliação Automática de Boletos - ISS")
 
-    st.write("Informe os dados do boleto manualmente e a URL da planilha Base para conciliação.")
+    st.markdown("Preencha os dados do boleto manualmente e informe o link da planilha **Base**.")
 
-    # Campos manuais para dados do boleto
-    valor_total_guia = st.text_input("Total Guia (valor total do boleto)", help="Informe o valor total da guia (ex: 148,51)")
-    vencimento_guia = st.text_input("Vencimento (dd/mm/aaaa)", help="Informe a data de vencimento da guia")
-    juros_multa_guia = st.text_input("Juros/Multa (se houver)", help="Informe o valor cobrado de juros ou multa, se houver, senão 0")
+    valor_total_guia = st.text_input("💰 Total Guia", help="Valor total do boleto (ex: 148,51)")
+    vencimento_guia = st.text_input("📅 Vencimento (dd/mm/aaaa)", help="Data de vencimento da guia")
+    juros_multa_guia = st.text_input("⚠️ Juros/Multa", help="Informe juros/multa se houver, senão 0")
 
-    url_planilha = st.text_input("🔗 URL da planilha Google Sheets (Base)")
-    arquivo_cred = st.file_uploader("🔐 Upload do arquivo credentials.json (opcional, para acesso via API)", type=["json"])
-    filial = st.number_input("🏢 Número da filial", min_value=1, step=1)
+    url_planilha = st.text_input("🔗 URL da planilha Google Sheets")
+    arquivo_cred = st.file_uploader("🔐 credentials.json (opcional, para acesso via API)", type=["json"])
+    filial = st.number_input("🏢 Número da Filial", min_value=1, step=1)
 
-    if st.button("✅ Verificar Conciliação"):
+    # Estado da execução
+    if 'executado' not in st.session_state:
+        st.session_state.executado = False
+
+    botao_label = "✅ Verificar Conciliação" if not st.session_state.executado else "🔁 Verificar Novamente"
+    botao_cor = "primary" if not st.session_state.executado else "secondary"
+
+    if st.button(botao_label, type="primary"):
         if not url_planilha or not filial:
             st.error("A URL da planilha e o número da filial são obrigatórios.")
             return
@@ -62,71 +69,70 @@ def main():
 
         vencimento = vencimento_guia.strip() if vencimento_guia else None
 
-        try:
-            if arquivo_cred:
-                planilha = conectar_planilha_google(arquivo_cred, url_planilha)
-                worksheet = planilha.worksheet("Base")
-                dados = worksheet.get_all_records()
-                df_base = pd.DataFrame(dados)
-            else:
-                df_base = ler_planilha_publica(url_planilha)
+        with st.spinner("🔄 Processando conciliação..."):
+            time.sleep(1.2)  # Simula carregamento realista
 
-            # Colunas da planilha conforme você indicou
-            col_essenciais = [
-                'FILIAL',
-                'NUM_TITULO_ISS',
-                'RAZAO_SOCIAL_PREFEITURA',
-                'VLR_SERVICO',
-                'VLR_ISS',
-                'CONVÊNIO',
-                'RESPONSÁVEL',
-                'DATA_EMISSAO',
-                'MES_ANO'
-            ]
+            try:
+                if arquivo_cred:
+                    planilha = conectar_planilha_google(arquivo_cred, url_planilha)
+                    worksheet = planilha.worksheet("Base")
+                    dados = worksheet.get_all_records()
+                    df_base = pd.DataFrame(dados)
+                else:
+                    df_base = ler_planilha_publica(url_planilha)
 
-            col_faltantes = [col for col in col_essenciais if col not in df_base.columns]
-            if col_faltantes:
-                st.error(f"A planilha está faltando as seguintes colunas essenciais: {', '.join(col_faltantes)}")
-                return
+                col_essenciais = [
+                    'FILIAL',
+                    'NUM_TITULO_ISS',
+                    'RAZAO_SOCIAL_PREFEITURA',
+                    'VLR_SERVICO',
+                    'VLR_ISS',
+                    'CONVÊNIO',
+                    'RESPONSÁVEL',
+                    'DATA_EMISSAO',
+                    'MES_ANO'
+                ]
 
-            # Filtrar filial
-            df_filial = df_base[df_base['FILIAL'] == filial]
-            if df_filial.empty:
-                st.warning("Nenhum registro encontrado para essa filial.")
-                return
+                col_faltantes = [col for col in col_essenciais if col not in df_base.columns]
+                if col_faltantes:
+                    st.error(f"Faltam colunas na planilha: {', '.join(col_faltantes)}")
+                    return
 
-            # Converter colunas numéricas
-            for col in ['VLR_SERVICO', 'VLR_ISS']:
-                df_filial[col] = df_filial[col].astype(str).str.replace('.', '').str.replace(',', '.').astype(float)
+                df_filial = df_base[df_base['FILIAL'] == filial]
+                if df_filial.empty:
+                    st.warning("Nenhum registro encontrado para essa filial.")
+                    return
 
-            soma_iss = df_filial['VLR_ISS'].sum()
+                for col in ['VLR_SERVICO', 'VLR_ISS']:
+                    df_filial[col] = df_filial[col].astype(str).str.replace('.', '').str.replace(',', '.').astype(float)
 
-            if valor_total is None:
-                st.warning("Valor total da guia não informado. Usando soma do VLR_ISS da planilha para comparação.")
+                soma_iss = df_filial['VLR_ISS'].sum()
+                valor_comparar = valor_total if valor_total is not None else soma_iss
+                diferenca = round(valor_comparar - soma_iss, 2)
 
-            valor_comparar = valor_total if valor_total is not None else soma_iss
+                df_filial['VALOR GUIA (INFORMADO)'] = valor_total if valor_total is not None else 'Não informado'
+                df_filial['JUROS/MULTA (INFORMADO)'] = juros_multa
+                df_filial['VENCIMENTO (INFORMADO)'] = vencimento if vencimento else 'Não informado'
+                df_filial['SOMA VLR_ISS (PLANILHA)'] = soma_iss
+                df_filial['DIFERENÇA FINAL'] = diferenca
 
-            diferenca = round(valor_comparar - soma_iss, 2)
+                st.success("✅ Conciliação concluída com sucesso!")
 
-            df_filial['VALOR GUIA (INFORMADO)'] = valor_total if valor_total is not None else 'Não informado'
-            df_filial['JUROS/MULTA (INFORMADO)'] = juros_multa
-            df_filial['VENCIMENTO (INFORMADO)'] = vencimento if vencimento else 'Não informado'
-            df_filial['SOMA VLR_ISS (PLANILHA)'] = soma_iss
-            df_filial['DIFERENÇA FINAL'] = diferenca
+                st.subheader("📄 Resultado da Conciliação")
+                st.dataframe(df_filial)
 
-            st.write("📄 Detalhamento da conciliação:")
-            st.dataframe(df_filial)
+                excel = gerar_excel_para_download(df_filial)
+                st.download_button(
+                    label="⬇️ Baixar Excel da Conciliação",
+                    data=excel,
+                    file_name=f"conciliacao_filial_{filial}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
-            excel = gerar_excel_para_download(df_filial)
-            st.download_button(
-                label="⬇️ Baixar planilha de conciliação (.xlsx)",
-                data=excel,
-                file_name=f"conciliacao_filial_{filial}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+                st.session_state.executado = True
 
-        except Exception as e:
-            st.error(f"Erro: {e}")
+            except Exception as e:
+                st.error(f"Erro ao processar: {e}")
 
 if __name__ == "__main__":
     main()
