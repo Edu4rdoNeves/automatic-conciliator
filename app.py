@@ -35,7 +35,7 @@ def gerar_excel_para_download(df_resultado):
 
 # Interface Streamlit
 def main():
-    st.title("Conciliação Automática de Boletos - ISS")
+    st.title("Conciliação Automática")
 
     st.write("Informe os dados do boleto manualmente e a URL da planilha Base para conciliação.")
 
